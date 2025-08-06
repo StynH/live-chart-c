@@ -45,7 +45,7 @@ jobs:
       working-directory: live-chart
       run: meson compile -C build
 
-    - name: Emit C sources (valac --ccode)
+    - name: Emit C sources
       working-directory: live-chart
       run: |
         rm -rf c-emitted && mkdir c-emitted
@@ -63,7 +63,7 @@ jobs:
               $VALA_FILES
         echo "Emitted C files: $(find c-emitted -name '*.c' | wc -l)"
 
-    - name: Build static lib (pure gcc)
+    - name: Build static lib
       working-directory: live-chart
       run: |
         sudo rm -f /usr/bin/valac || true
