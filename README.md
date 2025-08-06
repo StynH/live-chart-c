@@ -8,9 +8,9 @@ The `.vala` sources are compiled to `.c` using `valac --ccode` and built into a 
 
 Each release contains:
 
-- `c-emitted/*.c` - generated C source files  
-- `c-emitted/*.h` — generated headers  
-- `c-emitted/liblivechart.a` — compiled static library  
+- `c-emitted/*.c` -> generated C source files  
+- `c-emitted/*.h` -> generated headers  
+- `c-emitted/liblivechart.a` -> compiled static library  
 
 ## Original project
 
