@@ -1,0 +1,119 @@
+name: Build C artifact + Release (live-chart-c)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out upstream live-chart
+      uses: actions/checkout@v4
+      with:
+        repository: lcallarec/live-chart
+        ref: master
+        path: live-chart
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential meson ninja-build valac pkg-config jq zip \
+          libgtk-4-dev libglib2.0-dev libgee-0.8-dev libcairo2-dev \
+          gobject-introspection libgirepository1.0-dev
+
+    - name: Meson setup
+      working-directory: live-chart
+      run: meson setup build --buildtype=release
+
+    - name: Read version
+      id: ver
+      working-directory: live-chart
+      run: |
+        VERSION=$(meson introspect --projectinfo build | jq -r '.version')
+        echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+        [[ "$VERSION" == v* ]] && TAG="$VERSION" || TAG="v$VERSION"
+        echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+
+    - name: Meson compile
+      working-directory: live-chart
+      run: meson compile -C build
+
+    - name: Emit C sources (valac --ccode)
+      working-directory: live-chart
+      run: |
+        rm -rf c-emitted && mkdir c-emitted
+        VALA_FILES=$(find . \
+          -path ./build -prune -o \
+          -path ./c-emitted -prune -o \
+          -path ./examples -prune -o \
+          -path ./builder -prune -o \
+          -path ./tests -prune -o \
+          -type f -name '*.vala' -print | sort)
+        valac --ccode \
+              --directory=c-emitted \
+              --header=c-emitted/livechart.h \
+              --pkg gtk4 --pkg gee-0.8 --pkg cairo --pkg gobject-2.0 --pkg glib-2.0 \
+              $VALA_FILES
+        echo "Emitted C files: $(find c-emitted -name '*.c' | wc -l)"
+
+    - name: Build static lib (pure gcc)
+      working-directory: live-chart
+      run: |
+        sudo rm -f /usr/bin/valac || true
+        cd c-emitted
+        CFLAGS="$(pkg-config --cflags gtk4 gee-0.8 gobject-2.0 glib-2.0 cairo)"
+        mkdir -p obj
+        while IFS= read -r -d '' CFILE; do
+          OBJ="obj/$(echo "${CFILE#./}" | tr '/.' '__').o"
+          gcc -fPIC $CFLAGS -I. -c "$CFILE" -o "$OBJ"
+        done < <(find . -type f -name '*.c' -print0)
+        ar rcs liblivechart.a obj/*.o
+        ls -lh liblivechart.a
+
+    - name: Create release ZIP
+      id: zip
+      working-directory: live-chart
+      run: |
+        ZIP="live-chart-c-${{ steps.ver.outputs.version }}.zip"
+        zip -r "$ZIP" c-emitted
+        echo "zip=$ZIP" >>"$GITHUB_OUTPUT"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: live-chart-c-only-${{ steps.ver.outputs.version }}
+        path: live-chart/${{ steps.zip.outputs.zip }}
+
+    - name: Purge old assets
+      if: ${{ github.event_name != 'pull_request' }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ steps.ver.outputs.tag }}
+      run: |
+        set -e
+        if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG \
+            | jq -r '.assets[].id' \
+            | while read -r id; do
+                gh api -X DELETE repos/$GITHUB_REPOSITORY/releases/assets/$id
+              done
+        fi
+
+    - name: Publish GitHub Release
+      if: ${{ github.event_name != 'pull_request' }}
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.ver.outputs.tag }}
+        name: live-chart-c ${{ steps.ver.outputs.version }}
+        generate_release_notes: true
+        allowUpdates: true
+        files: live-chart/${{ steps.zip.outputs.zip }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
